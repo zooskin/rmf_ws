@@ -130,7 +130,8 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     command: >
       ros2 launch rmf_visualization visualization.launch.xml
-        headless:=true
+        headless:=false
+        map_name:=L1
     depends_on:
       - rmf_traffic_schedule
       - building_map_server
