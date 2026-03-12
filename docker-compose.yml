@@ -1,0 +1,137 @@
+version: "3.8"
+
+x-rmf-common: &rmf-common
+  image: rmf:jazzy
+  network_mode: host
+  ipc: host
+  pid: host
+  environment:
+    - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+    - CYCLONEDDS_URI=<CycloneDDS><Domain><General><AllowMulticast>true</AllowMulticast><EnableMulticastLoopback>true</EnableMulticastLoopback></General></Domain></CycloneDDS>
+  restart: unless-stopped
+
+services:
+  # ==========================================================================
+  # RMF Core (required)
+  # ==========================================================================
+
+  # 교통 스케줄 DB — 모든 로봇 궤적/계획 관리, fleet adapter 시작 전 반드시 실행
+  rmf_traffic_schedule:
+    <<: *rmf-common
+    container_name: rmf_traffic_schedule
+    command: ros2 run rmf_traffic_ros2 rmf_traffic_schedule
+
+  # 배타 구간(blockade) 조정 — 로봇 간 충돌 방지
+  rmf_traffic_blockade:
+    <<: *rmf-common
+    container_name: rmf_traffic_blockade
+    command: ros2 run rmf_traffic_ros2 rmf_traffic_blockade
+    depends_on:
+      - rmf_traffic_schedule
+
+  # 태스크 분배 — bidding 기반 태스크 할당
+  rmf_task_dispatcher:
+    <<: *rmf-common
+    container_name: rmf_task_dispatcher
+    command: ros2 run rmf_task_ros2 rmf_task_dispatcher
+    depends_on:
+      - rmf_traffic_schedule
+
+  # Building Map 서버 — visualization 노드들이 맵 데이터를 가져가는 서비스 제공
+  building_map_server:
+    <<: *rmf-common
+    container_name: building_map_server
+    volumes:
+      - ./src/vda5050_fleet_adapter/office.building.yaml:/building_map/office.building.yaml:ro
+    command: ros2 run rmf_building_map_tools building_map_server /building_map/office.building.yaml
+
+  # ==========================================================================
+  # VDA5050 Fleet Adapter (소스 마운트 — 코드 수정 시 컨테이너 재시작만 하면 반영)
+  # ==========================================================================
+
+  vda5050_fleet_adapter:
+    <<: *rmf-common
+    container_name: vda5050_fleet_adapter
+    volumes:
+      - ./src/vda5050_fleet_adapter:/vda5050_ws/src/vda5050_fleet_adapter:ro
+    command:
+      - bash
+      - -c
+      - |
+        cd /vda5050_ws &&
+        colcon build --packages-select vda5050_fleet_adapter --symlink-install &&
+        source install/setup.bash &&
+        ros2 run vda5050_fleet_adapter fleet_adapter \
+          -c /vda5050_ws/src/vda5050_fleet_adapter/vda5050_fleet_adapter/config/config.yaml \
+          -n /vda5050_ws/src/vda5050_fleet_adapter/0.yaml
+    depends_on:
+      - rmf_traffic_schedule
+      - rmf_traffic_blockade
+      - rmf_task_dispatcher
+
+  # ==========================================================================
+  # Optional — 필요 시 주석 해제
+  # ==========================================================================
+
+  # # 자동문 요청 중재 — 로봇이 자동문을 통과해야 할 때
+  # door_supervisor:
+  #   <<: *rmf-common
+  #   container_name: door_supervisor
+  #   command: ros2 run rmf_fleet_adapter door_supervisor
+  #   depends_on:
+  #     - rmf_traffic_schedule
+
+  # # 엘리베이터 요청 큐잉/충돌 해소 — 로봇이 엘리베이터를 사용할 때
+  # lift_supervisor:
+  #   <<: *rmf-common
+  #   container_name: lift_supervisor
+  #   command: ros2 run rmf_fleet_adapter lift_supervisor
+  #   depends_on:
+  #     - rmf_traffic_schedule
+
+  # Mutex 그룹 관리 — 좁은 복도 등 배타적 접근 구간 제어
+  mutex_group_supervisor:
+    <<: *rmf-common
+    container_name: mutex_group_supervisor
+    command: ros2 run rmf_fleet_adapter mutex_group_supervisor
+    depends_on:
+      - rmf_traffic_schedule
+
+  # Reservation 노드 — 주차 구역 충돌 해소
+  rmf_reservation_node:
+    <<: *rmf-common
+    container_name: rmf_reservation_node
+    command: ros2 run rmf_reservation_node queue_manager
+    depends_on:
+      - rmf_traffic_schedule
+
+  # # WebSocket API 서버 — HTTP/WS로 RMF 상태/태스크 접근 시
+  # rmf_websocket:
+  #   <<: *rmf-common
+  #   container_name: rmf_websocket
+  #   command: ros2 run rmf_fleet_adapter fleet_state_visualizer
+  #   depends_on:
+  #     - rmf_traffic_schedule
+
+  # ==========================================================================
+  # Visualization — RMF 상태 시각화 (schedule, fleet, navgraph, floorplan 등) 
+  # ==========================================================================
+  # xhost +local:docker 명령으로 X 서버 접근 권한 부여 필요
+  rmf_visualization:
+    <<: *rmf-common
+    container_name: rmf_visualization
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - CYCLONEDDS_URI=<CycloneDDS><Domain><General><AllowMulticast>true</AllowMulticast><EnableMulticastLoopback>true</EnableMulticastLoopback></General></Domain></CycloneDDS>
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    command: >
+      ros2 launch rmf_visualization visualization.launch.xml
+        headless:=true
+    depends_on:
+      - rmf_traffic_schedule
+      - building_map_server
+

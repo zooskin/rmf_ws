@@ -1,0 +1,11 @@
+build/
+install/
+log/
+.git/
+src/demonstrations/
+src/vda5050_fleet_adapter/
+src/vda5050_gui/
+src/vda5050_robot_simulator/
+**/__pycache__/
+**/.git/
+**/*.pyc
