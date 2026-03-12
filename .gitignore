@@ -13,7 +13,10 @@ htmlcov/
 .env
 .vscode/
 .claude/
-src/
+src/vda5050_fleet_adapter/
+src/vda5050_gui/
+src/vda5050_robot_simulator/
 *.tar
 *.tar.gz
 *.repos
+src/.git_backup/
