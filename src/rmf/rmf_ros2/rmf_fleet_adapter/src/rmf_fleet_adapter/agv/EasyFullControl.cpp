@@ -3837,12 +3837,7 @@ auto EasyFullControl::add_robot(
           context,
           nav_params,
           enable_responsive_wait,
-          // [PATCH] Capture use_parking_reservation so it can be set inside
-          // the deferred worker, ensuring it is configured before
-          // set_idle_task (which is scheduled after this worker task in
-          // FleetUpdateHandle::add_robot).
           use_parking_reservation,
-          // [END PATCH]
           finishing_request
         ](const auto&)
         {
@@ -3865,10 +3860,7 @@ auto EasyFullControl::add_robot(
             context->robot_finishing_request(true);
           }
 
-          // [PATCH] Set parking reservation flag inside the deferred worker
-          // so it is ready before set_idle_task triggers _begin_waiting.
           context->_set_parking_spot_manager(use_parking_reservation);
-          // [END PATCH]
 
           RCLCPP_INFO(
             node->get_logger(),
