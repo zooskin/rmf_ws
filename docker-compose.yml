@@ -115,7 +115,45 @@ services:
   #     - rmf_traffic_schedule
 
   # ==========================================================================
-  # Visualization — RMF 상태 시각화 (schedule, fleet, navgraph, floorplan 등) 
+  # Web Monitoring UI — api-server + React 대시보드 (rmf-web 공식)
+  # ==========================================================================
+
+  # RMF API Server — ROS2 ↔ REST/WebSocket API (http://localhost:8100)
+  # 이미지는 1회만 빌드, config는 볼륨 마운트
+  rmf_api_server:
+    build:
+      context: ./src/rmf_web_custom
+      dockerfile: Dockerfile.api-server-runtime
+    network_mode: host
+    ipc: host
+    pid: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - CYCLONEDDS_URI=<CycloneDDS><Domain><General><AllowMulticast>true</AllowMulticast><EnableMulticastLoopback>true</EnableMulticastLoopback></General></Domain></CycloneDDS>
+      - RMF_API_SERVER_CONFIG=/api_server_ws/sqlite_local_config.py
+    volumes:
+      - ./src/rmf_web_custom/packages/api-server/sqlite_local_config.py:/api_server_ws/sqlite_local_config.py:ro
+    restart: unless-stopped
+    container_name: rmf_api_server
+    depends_on:
+      - rmf_traffic_schedule
+
+  # RMF Dashboard — http://localhost:3000
+  # 코드 수정 시: docker compose build rmf_web_dashboard → docker compose up -d rmf_web_dashboard
+  # 로컬 빌드 시: ./scripts/build-web.sh dashboard 후 dist/ 볼륨 마운트 추가 가능
+  rmf_web_dashboard:
+    build:
+      context: ./src/rmf_web_custom
+      dockerfile: Dockerfile.dashboard-runtime
+    container_name: rmf_web_dashboard
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - rmf_api_server
+
+  # ==========================================================================
+  # Visualization — RMF 상태 시각화 (schedule, fleet, navgraph, floorplan 등)
   # ==========================================================================
   # xhost +local:docker 명령으로 X 서버 접근 권한 부여 필요
   rmf_visualization:

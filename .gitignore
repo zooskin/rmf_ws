@@ -16,7 +16,9 @@ htmlcov/
 src/vda5050_fleet_adapter/
 src/vda5050_gui/
 src/vda5050_robot_simulator/
+src/rmf_web_custom/
 *.tar
 *.tar.gz
 *.repos
 src/.git_backup/
+.git_backup_root

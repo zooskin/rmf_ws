@@ -1955,13 +1955,9 @@ void FleetUpdateHandle::add_robot(
             fleet->_pimpl->unregistered_charging_assignments.erase(c_it);
           }
 
-          // [PATCH] Call handle_cb before scheduling set_idle_task so that
-          // EasyFullControl's deferred worker (which configures nav_params,
-          // parking reservation, etc.) is queued first. Then schedule
-          // set_idle_task as a separate worker task, guaranteeing it runs
-          // after the deferred worker completes and all robot state
-          // (including _set_parking_spot_manager) is fully initialized.
-          auto ctx_for_idle = context;
+          mgr->set_idle_task(fleet->_pimpl->idle_task);
+
+          // -- Calling the handle_cb should always happen last --
           if (handle_cb)
           {
             handle_cb(RobotUpdateHandle::Implementation::make(std::move(context)));
@@ -1975,13 +1971,6 @@ void FleetUpdateHandle::add_robot(
               "not be able to update the state of the new robot. This is likely to "
               "be a fleet adapter development error.");
           }
-
-          ctx_for_idle->worker().schedule(
-            [mgr, idle_task = fleet->_pimpl->idle_task](const auto&)
-            {
-              mgr->set_idle_task(idle_task);
-            });
-          // [END PATCH]
         });
     });
 }
