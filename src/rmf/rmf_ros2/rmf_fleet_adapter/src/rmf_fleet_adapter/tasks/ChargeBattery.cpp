@@ -441,23 +441,39 @@ public:
           if (_desc.indefinite)
           {
             // idle 충전: parking spot + charger 중 가장 가까운 곳 선택
+            // 예약 시스템이 활성화되어 있고 티켓이 없으면 parking 제외
             const auto& graph = _context->navigation_graph();
             auto current_location = _context->location();
+
+            const bool parking_available =
+              !_context->_parking_spot_manager_enabled()
+              || _context->_has_ticket();
 
             std::optional<double> best_parking_cost;
             std::size_t best_parking_wp = 0;
 
-            auto parking_spots =
-              _context->_find_and_sort_parking_spots(true);
-            if (!parking_spots.empty())
+            if (parking_available)
             {
-              best_parking_wp = parking_spots.front().waypoint();
-              auto result = _context->planner()->quickest_path(
-                current_location, best_parking_wp);
-              if (result.has_value())
+              auto parking_spots =
+                _context->_find_and_sort_parking_spots(true);
+              if (!parking_spots.empty())
               {
-                best_parking_cost = result->cost();
+                best_parking_wp = parking_spots.front().waypoint();
+                auto result = _context->planner()->quickest_path(
+                  current_location, best_parking_wp);
+                if (result.has_value())
+                {
+                  best_parking_cost = result->cost();
+                }
               }
+            }
+            else
+            {
+              RCLCPP_INFO(
+                _context->node()->get_logger(),
+                "Parking spots excluded (no reservation ticket) "
+                "for robot [%s], searching charger only",
+                _context->requester_id().c_str());
             }
 
             std::optional<double> charger_cost;
