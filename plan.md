@@ -348,14 +348,14 @@ include 추가 (이미 있는지 확인 필요):
 
 ## 7. VDA5050 Fleet Adapter 측 변경
 
-### 7.1 [ ] config.yaml 변경
+### 7.1 [x] config.yaml 변경
 
 ```yaml
 # config.yaml
 finishing_request: "charge"    # 기존 "charge" 그대로 사용 (compose_charge 불필요)
 ```
 
-### 7.2 [ ] `startCharging` / `stopCharging` action 등록
+### 7.2 [x] `startCharging` / `stopCharging` action 등록
 
 `presentation/main.py`에서:
 
@@ -364,7 +364,7 @@ fleet_handle.add_performable_action("startCharging", consider_callback)
 fleet_handle.add_performable_action("stopCharging", consider_callback)
 ```
 
-### 7.3 [ ] RobotAdapter에서 execute_action 처리
+### 7.3 [x] RobotAdapter에서 execute_action 처리
 
 ```python
 def execute_action(self, category: str, description: dict, execution):
@@ -385,7 +385,7 @@ def execute_action(self, category: str, description: dict, execution):
         pass
 ```
 
-### 7.4 [ ] AGV action FINISHED 처리
+### 7.4 [x] AGV action FINISHED 처리
 
 ```python
 def _on_agv_state_update(self, state):
@@ -408,7 +408,7 @@ def _on_agv_state_update(self, state):
                 self._stop_charging_execution.finished()
 ```
 
-### 7.5 [ ] 기존 dock 기반 충전 로직 제거
+### 7.5 [x] 기존 dock 기반 충전 로직 제거
 
 Phase 2 구현 완료 후, adapter에서 다음 로직을 제거/비활성화:
 - `destination.dock` 감지 → startCharging 자동 생성
