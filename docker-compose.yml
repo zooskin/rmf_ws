@@ -119,11 +119,9 @@ services:
   # ==========================================================================
 
   # RMF API Server — ROS2 ↔ REST/WebSocket API (http://localhost:8100)
-  # 이미지는 1회만 빌드, config는 볼륨 마운트
+  # 이미지: docker build -f Dockerfile.api-server-runtime -t rmf-api-server ./src/rmf_web_custom
   rmf_api_server:
-    build:
-      context: ./src/rmf_web_custom
-      dockerfile: Dockerfile.api-server-runtime
+    image: ${RMF_API_SERVER_IMAGE:-rmf-api-server}
     network_mode: host
     ipc: host
     pid: host
@@ -139,15 +137,14 @@ services:
     depends_on:
       - rmf_traffic_schedule
 
-  # RMF Dashboard — http://localhost:3000
-  # 코드 수정 시: docker compose build rmf_web_dashboard → docker compose up -d rmf_web_dashboard
-  # 로컬 빌드 시: ./scripts/build-web.sh dashboard 후 dist/ 볼륨 마운트 추가 가능
+  # RMF Dashboard — http://localhost:${DASHBOARD_PORT:-3100}
+  # 이미지: docker build -f Dockerfile.dashboard-runtime -t rmf-web-dashboard ./src/rmf_web_custom
   rmf_web_dashboard:
-    build:
-      context: ./src/rmf_web_custom
-      dockerfile: Dockerfile.dashboard-runtime
+    image: ${RMF_WEB_DASHBOARD_IMAGE:-rmf-web-dashboard}
     container_name: rmf_web_dashboard
     network_mode: host
+    environment:
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-3100}
     restart: unless-stopped
     depends_on:
       - rmf_api_server
