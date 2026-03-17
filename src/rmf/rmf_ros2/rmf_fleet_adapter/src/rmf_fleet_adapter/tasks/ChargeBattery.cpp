@@ -19,12 +19,20 @@
 #include "../events/WaitForCancel.hpp"
 #include "../events/GoToPlace.hpp"
 #include "../events/LegacyPhaseShim.hpp"
+// ==================================================================
+// [PATCH] PerformAction for startCharging/stopCharging
+#include "../events/PerformAction.hpp"
+// ==================================================================
 
 #include "ChargeBattery.hpp"
 
 #include <rmf_task_sequence/events/Bundle.hpp>
 #include <rmf_task_sequence/phases/SimplePhase.hpp>
 #include <rmf_task_sequence/events/Placeholder.hpp>
+// ==================================================================
+// [PATCH] PerformAction description for startCharging/stopCharging
+#include <rmf_task_sequence/events/PerformAction.hpp>
+// ==================================================================
 
 #include <rmf_task_sequence/Task.hpp>
 
@@ -486,6 +494,43 @@ public:
             update);
         });
 
+      // ==================================================================
+      // [PATCH] PerformAction("startCharging") — park 모드가 아닌 경우 삽입
+      // adapter의 execute_action("startCharging", ...) 콜백이 호출됨.
+      // adapter는 execution.finished()를 호출하지 않아 무기한 충전 대기.
+      // ==================================================================
+      if (!_desc.park)
+      {
+        using PerformActionDesc =
+          rmf_task_sequence::events::PerformAction::Description;
+
+        nlohmann::json start_charging_desc;
+        start_charging_desc["charging_waypoint"] = target_wp;
+
+        auto perform_action_desc = PerformActionDesc::make(
+          "startCharging",
+          start_charging_desc,
+          std::chrono::seconds(60),
+          false,
+          std::nullopt);
+
+        standbys.push_back(
+          [
+            assign_id = _assign_id,
+            context = _context,
+            perform_action_desc
+          ](UpdateFn update) -> StandbyPtr
+          {
+            return events::PerformAction::Standby::make(
+              assign_id,
+              context->make_get_state(),
+              context->task_parameters(),
+              *perform_action_desc,
+              std::move(update));
+          });
+      }
+      // ==================================================================
+
       if (_desc.park)
       {
         standbys.push_back(
@@ -710,13 +755,30 @@ void add_charge_battery(
   auto charge_battery_task_unfolder =
     [](const rmf_task::requests::ChargeBattery::Description& desc)
     {
+      using PerformActionDesc =
+        rmf_task_sequence::events::PerformAction::Description;
+
+      // ==================================================================
+      // [PATCH] on_cancel: stopCharging — task cancel 시 자동 실행
+      // ==================================================================
+      auto stop_charging_phase = Phase::Description::make(
+        PerformActionDesc::make(
+          "stopCharging",
+          nlohmann::json{},
+          std::chrono::seconds(30),
+          false,
+          std::nullopt),
+        "Stop charging", "");
+
       rmf_task_sequence::Task::Builder builder;
       builder
       .add_phase(
         Phase::Description::make(
           std::make_shared<ChargeBatteryEvent::Description>(
             std::nullopt, desc.indefinite(), false),
-          "Charge Battery", ""), {});
+          "Charge Battery", ""),
+        {stop_charging_phase});   // on_cancel: stopCharging
+      // ==================================================================
 
       return *builder.build("Charge Battery", "");
     };
