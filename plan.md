@@ -100,9 +100,12 @@ charge_battery_task_unfolder 수정 후:
 
 | 시나리오 | indefinite | 시퀀스 | cancel 시 |
 |---------|-----------|--------|----------|
-| idle 충전 (`finishing_request: "charge"`) | true | GoToPlace → startCharging → WaitForCharge(무기한) | on_cancel: stopCharging |
+| idle → 가까운 곳이 charger | true | GoToPlace → startCharging → WaitForCharge(무기한) | on_cancel: stopCharging |
+| idle → 가까운 곳이 parking | true | GoToPlace → WaitForCancel | on_cancel: stopCharging (adapter가 즉시 finished) |
 | 저배터리 충전 (`recharge_threshold`) | false | GoToPlace → startCharging → WaitForCharge(recharge_soc까지) | on_cancel: stopCharging |
 | 주차 (`finishing_request: "park"`) | N/A | GoToPlace → WaitForCancel | 변경 없음 |
+
+> **Phase 3 예정**: idle 시 `is_parking_spot` + `is_charger` 통합 검색 → target 속성에 따라 동적 분기. 섹션 10 참조.
 
 ### 전체 충전 흐름 (타임라인)
 
@@ -491,7 +494,234 @@ PerformAction 구현체를 사용해야 한다:
 
 ---
 
-## 10. 주의사항
+## 10. Phase 3: idle spot 통합 검색 (parking + charger)
+
+### 배경
+
+현재 `finishing_request: "charge"`는 charger만, `"park"`는 parking spot만 검색한다.
+로봇이 idle일 때 parking과 charger를 **통합 검색**하여 가장 가까운 곳으로 보내되,
+도착지 속성에 따라 동적으로 충전/대기를 결정하는 방식으로 변경한다.
+
+### 현재 동작 (`_consider_restart()`)
+
+```
+_desc.park == true (finishing_request: "park")
+  → _find_and_sort_parking_spots()  ← is_parking_spot만 검색
+  → standbys = [GoToPlace, WaitForCancel]
+
+_desc.park == false (finishing_request: "charge")
+  → dedicated_charging_wp()  ← charger만 검색
+  → standbys = [GoToPlace, startCharging, WaitForCharge]
+```
+
+### 변경 후 동작
+
+```
+finishing_request: "charge" (idle 시)
+  → is_parking_spot + is_charger 통합 검색 → 가장 가까운 spot 선택
+  → target이 is_charger?
+    ├─ YES → [GoToPlace, startCharging, WaitForCharge]  (충전)
+    └─ NO  → [GoToPlace, WaitForCancel]                 (대기)
+
+recharge_threshold 발동 (저배터리)
+  → 기존대로 dedicated_charging_wp() 사용 (반드시 charger)
+  → [GoToPlace, startCharging, WaitForCharge]
+```
+
+### 시나리오별 동작
+
+| 시나리오 | 검색 대상 | 분기 기준 | 시퀀스 |
+|---------|----------|----------|--------|
+| idle + 가까운 곳이 charger | parking + charger | `is_charger()` | GoToPlace → startCharging → WaitForCharge |
+| idle + 가까운 곳이 parking | parking + charger | `is_parking_spot()` | GoToPlace → WaitForCancel |
+| 저배터리 자동 충전 | charger만 | - | GoToPlace → startCharging → WaitForCharge (변경 없음) |
+| `finishing_request: "park"` | parking만 | - | GoToPlace → WaitForCancel (기존 동작 유지) |
+
+### 5대 로봇, 3 parking + 2 charger 예시
+
+```
+nav_graph:
+  parking_1 (is_parking_spot=true)
+  parking_2 (is_parking_spot=true)
+  parking_3 (is_parking_spot=true)
+  charger_1 (is_charger=true)
+  charger_2 (is_charger=true)
+
+finishing_request: "charge"
+
+idle 시:
+  AGV_001 → parking_1 (가장 가까움) → WaitForCancel
+  AGV_002 → charger_1 (가장 가까움) → startCharging → WaitForCharge
+  AGV_003 → parking_2 (가장 가까움) → WaitForCancel
+  AGV_004 → charger_2 (가장 가까움) → startCharging → WaitForCharge
+  AGV_005 → parking_3 (가장 가까움) → WaitForCancel
+
+저배터리 발동 시:
+  어떤 로봇이든 → dedicated_charging_wp (charger) → startCharging → WaitForCharge
+```
+
+### 수정 대상 파일
+
+| 상태 | 파일 | 수정 내용 |
+|------|------|----------|
+| [x] | `ChargeBattery.cpp` | `_consider_restart()` — charge 모드에서 통합 검색 + 동적 분기 |
+
+### 구현 상세
+
+#### 10.1 [x] `_consider_restart()` — charge 모드 통합 검색
+
+**현재 코드** (line 435-438):
+```cpp
+else
+{
+  // Charge mode: use dedicated charging waypoint
+  target_wp = _context->dedicated_charging_wp();
+}
+```
+
+**수정 후**:
+```cpp
+else
+{
+  // Charge mode (idle): parking + charger 통합 검색
+  if (_desc.indefinite)
+  {
+    // idle 충전 (indefinite=true): 통합 검색
+    auto parking_spots = _context->_find_and_sort_parking_spots(true);
+    std::size_t nearest_parking_wp = parking_spots.empty()
+      ? std::numeric_limits<std::size_t>::max()
+      : parking_spots.front().waypoint();
+    double parking_cost = parking_spots.empty()
+      ? std::numeric_limits<double>::max()
+      : /* parking_spots.front()의 경로 비용 */;
+
+    std::size_t charger_wp = _context->dedicated_charging_wp();
+    double charger_cost = /* charger_wp까지의 경로 비용 */;
+
+    if (parking_cost < charger_cost && !parking_spots.empty())
+    {
+      target_wp = nearest_parking_wp;
+      // _target_is_charger = false → 나중에 standby 분기에 사용
+    }
+    else
+    {
+      target_wp = charger_wp;
+      // _target_is_charger = true
+    }
+  }
+  else
+  {
+    // 저배터리 충전 (indefinite=false): 반드시 charger
+    target_wp = _context->dedicated_charging_wp();
+  }
+}
+```
+
+**경로 비용 계산**: `_find_and_sort_parking_spots()`는 이미 비용 기반으로 정렬된 결과를 반환한다.
+charger까지의 비용은 `_context`의 planner를 통해 계산해야 한다.
+또는 `_find_and_sort_parking_spots()`를 확장하여 charger waypoint도 포함시키는 방법도 가능하다.
+
+#### 10.2 [x] standby 조립 — 동적 분기
+
+**현재**: `_desc.park` 플래그로 분기 (task 생성 시 결정)
+**수정**: `target_wp`의 graph 속성으로 분기 (runtime 결정)
+
+```cpp
+// target waypoint의 속성 확인
+const auto& graph = _context->navigation_graph();
+bool target_is_charger = graph.get_waypoint(target_wp).is_charger();
+
+// GoToPlace (공통)
+standbys.push_back(GoToPlace(target_wp));
+
+// charger인 경우만 startCharging 삽입
+if (target_is_charger && !_desc.park)
+{
+  standbys.push_back(PerformAction("startCharging"));
+}
+
+// charger → WaitForCharge, parking → WaitForCancel
+if (target_is_charger && !_desc.park)
+{
+  standbys.push_back(WaitForCharge(...));
+}
+else
+{
+  standbys.push_back(WaitForCancel());
+}
+```
+
+#### 10.3 [x] on_cancel 동적 처리
+
+**문제**: `charge_battery_task_unfolder`에서 on_cancel(stopCharging)을 정적으로 추가하는데,
+parking spot으로 간 경우에는 stopCharging이 불필요하다.
+
+**해결 방안**:
+- on_cancel에 stopCharging이 포함되어 있어도, parking spot에서는 RMF가 task cancel 시
+  adapter에 `execute_action("stopCharging")` 콜백이 호출됨
+- adapter 측에서 charger에 있지 않으면 즉시 `execution.finished()` 호출하여 skip 처리
+- 또는 `_desc.park` 대신 runtime 분기로 on_cancel 포함 여부를 결정
+  (단, unfolder 시점에는 target을 모르므로 항상 포함하고 adapter에서 처리하는 것이 현실적)
+
+**adapter 측 stopCharging 처리 (robot_adapter.py)**:
+```python
+def _handle_stop_charging(self, description, execution):
+    if self._charger_name is None:
+        # parking spot에서 호출됨 → charger가 아니므로 즉시 완료
+        execution.finished()
+        return
+    # charger에서 호출됨 → VDA5050 stopCharging 전송
+    ...
+```
+
+#### 10.4 [x] 통합 검색 구현 (기존 API 활용)
+
+**방안 A**: 기존 `_find_and_sort_parking_spots()`에 charger 포함 옵션 추가
+```cpp
+// RobotContext.cpp
+std::vector<Plan::Goal> _find_and_sort_available_spots(
+  bool same_floor, bool include_chargers = false) const
+{
+  for (std::size_t wp_idx = 0; wp_idx < graph.num_waypoints(); ++wp_idx)
+  {
+    const auto& wp = graph.get_waypoint(wp_idx);
+    if (wp.is_parking_spot() || (include_chargers && wp.is_charger()))
+    {
+      // 경로 비용 계산 + 정렬
+    }
+  }
+}
+```
+
+**방안 B**: `_consider_restart()` 내에서 parking_spots와 charger를 각각 검색 후 비용 비교
+- 추가 함수 없이 기존 API만 활용
+- 단, charger까지의 비용 계산을 위해 planner 접근 필요
+
+### 주의사항
+
+#### `_desc.park`과 `_desc.indefinite`의 역할 변경
+
+| 플래그 | 현재 의미 | 변경 후 의미 |
+|--------|----------|-------------|
+| `_desc.park` | `finishing_request: "park"` | 기존 유지 (parking spot만 검색) |
+| `_desc.indefinite` | idle 충전 (무기한) vs 저배터리 충전 (SOC 목표) | idle이면 통합 검색, 저배터리면 charger만 |
+| (신규) `target_is_charger` | - | runtime에 target wp 속성으로 결정 |
+
+#### `charge_battery_task_unfolder`의 on_cancel
+
+- on_cancel(stopCharging)은 **항상 포함** (unfolder 시점에 target을 모름)
+- parking spot에서 cancel 시 adapter가 즉시 `execution.finished()` → 실질적으로 no-op
+
+#### 저배터리 자동 충전은 변경 없음
+
+`_desc.indefinite == false` (recharge_threshold 발동)인 경우:
+- 반드시 charger로 이동하여 충전해야 함
+- 통합 검색 대상이 아님
+- 기존 `dedicated_charging_wp()` 그대로 사용
+
+---
+
+## 11. 주의사항
 
 ### add_performable_action 등록 필수
 
