@@ -434,8 +434,73 @@ public:
         }
         else
         {
-          // Charge mode: use dedicated charging waypoint
-          target_wp = _context->dedicated_charging_wp();
+          // ==============================================================
+          // [PATCH] Charge mode: idle(indefinite)이면 parking+charger 통합
+          // 검색, 저배터리(non-indefinite)이면 charger만 사용.
+          // ==============================================================
+          if (_desc.indefinite)
+          {
+            // idle 충전: parking spot + charger 중 가장 가까운 곳 선택
+            const auto& graph = _context->navigation_graph();
+            auto current_location = _context->location();
+
+            std::optional<double> best_parking_cost;
+            std::size_t best_parking_wp = 0;
+
+            auto parking_spots =
+              _context->_find_and_sort_parking_spots(true);
+            if (!parking_spots.empty())
+            {
+              best_parking_wp = parking_spots.front().waypoint();
+              auto result = _context->planner()->quickest_path(
+                current_location, best_parking_wp);
+              if (result.has_value())
+              {
+                best_parking_cost = result->cost();
+              }
+            }
+
+            std::optional<double> charger_cost;
+            std::size_t charger_wp = _context->dedicated_charging_wp();
+            {
+              auto result = _context->planner()->quickest_path(
+                current_location, charger_wp);
+              if (result.has_value())
+              {
+                charger_cost = result->cost();
+              }
+            }
+
+            if (best_parking_cost.has_value()
+              && (!charger_cost.has_value()
+                || *best_parking_cost < *charger_cost))
+            {
+              target_wp = best_parking_wp;
+              RCLCPP_INFO(
+                _context->node()->get_logger(),
+                "Idle spot: nearest parking [%lu] (cost=%.1f) "
+                "for robot [%s]",
+                target_wp, *best_parking_cost,
+                _context->requester_id().c_str());
+            }
+            else
+            {
+              target_wp = charger_wp;
+              RCLCPP_INFO(
+                _context->node()->get_logger(),
+                "Idle spot: nearest charger [%lu] (cost=%.1f) "
+                "for robot [%s]",
+                target_wp,
+                charger_cost.value_or(-1.0),
+                _context->requester_id().c_str());
+            }
+          }
+          else
+          {
+            // 저배터리 충전: 반드시 charger
+            target_wp = _context->dedicated_charging_wp();
+          }
+          // ==============================================================
         }
 
         bool location_changed = true;
@@ -474,6 +539,14 @@ public:
       _current_target_wp = target_wp;
       _current_waiting_for_charger = _context->waiting_for_charger();
 
+      // ==================================================================
+      // [PATCH] target waypoint의 속성으로 동적 분기
+      // charger → startCharging + WaitForCharge
+      // parking → WaitForCancel
+      // ==================================================================
+      const bool target_is_charger =
+        _context->navigation_graph().get_waypoint(target_wp).is_charger();
+
       using UpdateFn = std::function<void()>;
       using MakeStandby = std::function<StandbyPtr(UpdateFn)>;
       std::vector<MakeStandby> standbys;
@@ -495,11 +568,11 @@ public:
         });
 
       // ==================================================================
-      // [PATCH] PerformAction("startCharging") — park 모드가 아닌 경우 삽입
+      // [PATCH] PerformAction("startCharging") — target이 charger인 경우 삽입
       // adapter의 execute_action("startCharging", ...) 콜백이 호출됨.
       // adapter는 execution.finished()를 호출하지 않아 무기한 충전 대기.
       // ==================================================================
-      if (!_desc.park)
+      if (target_is_charger && !_desc.park)
       {
         using PerformActionDesc =
           rmf_task_sequence::events::PerformAction::Description;
@@ -531,8 +604,9 @@ public:
       }
       // ==================================================================
 
-      if (_desc.park)
+      if (_desc.park || !target_is_charger)
       {
+        // parking spot 또는 park 모드 → 무기한 대기
         standbys.push_back(
           [
             assign_id = _assign_id,
