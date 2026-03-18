@@ -17,6 +17,7 @@ src/vda5050_fleet_adapter/
 src/vda5050_gui/
 src/vda5050_robot_simulator/
 src/rmf_web_custom/
+src/battery_management/
 *.tar
 *.tar.gz
 *.repos

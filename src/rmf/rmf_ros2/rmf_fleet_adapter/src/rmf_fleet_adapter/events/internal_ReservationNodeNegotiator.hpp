@@ -184,6 +184,12 @@ public:
           }
         });
 
+    // ==================================================================
+    // [PATCH] "Already have a goal" skip 시에도 reservation claim 수행
+    // 기존: reserved location과 goal이 같으면 reservation protocol 전체 skip
+    // → 충전기(is_parking_spot:true)가 free_parking_spot에서 점유로 안 잡히는 문제
+    // 변경: skip하지 않고 항상 reservation request를 보내도록 함
+    // ==================================================================
     if (!always_recalculate_nearest_goal)
     {
       for (std::size_t i = 0; i < negotiator->_goals.size(); ++i)
@@ -191,19 +197,17 @@ public:
         if (events::wp_name(*context.get(), negotiator->_goals[i]) == context->_get_reserved_location())
         {
           RCLCPP_INFO(context->node()->get_logger(),
-            "%s: Already have a goal no need to engage reservation system\n",
-            context->requester_id().c_str());
-          context->worker().schedule([
-              cb = negotiator->_selected_final_destination_cb,
-              wp = negotiator->_goals[i]
-            ](const auto&)
-            {
-              cb(wp);
-            });
-          return negotiator;
+            "%s: Already have a goal [%s], re-engaging reservation system "
+            "to ensure spot is claimed\n",
+            context->requester_id().c_str(),
+            context->_get_reserved_location().c_str());
+          // 기존: 바로 cb 호출하고 return → reservation node에 claim 안 됨
+          // 변경: break하여 아래 make_request()로 진행
+          break;
         }
       }
     }
+    // ==================================================================
     RCLCPP_INFO(negotiator->_context->node()->get_logger(),
       "%s: Sending reservation request",
       negotiator->_context->requester_id().c_str());
