@@ -33,7 +33,7 @@ COPY src/rmf/rmf_visualization src/rmf/rmf_visualization
 COPY src/rmf/rmf_visualization_msgs src/rmf/rmf_visualization_msgs
 # rmf_ros2 내부에서 fleet_adapter 제외
 COPY src/rmf/rmf_ros2/rmf_charging_schedule src/rmf/rmf_ros2/rmf_charging_schedule
-COPY src/rmf/rmf_ros2/rmf_reservation_node src/rmf/rmf_ros2/rmf_reservation_node
+# rmf_reservation_node는 rmf_fleet_adapter에 의존 → Stage 2에서 빌드
 COPY src/rmf/rmf_ros2/rmf_task_ros2 src/rmf/rmf_ros2/rmf_task_ros2
 COPY src/rmf/rmf_ros2/rmf_traffic_ros2 src/rmf/rmf_ros2/rmf_traffic_ros2
 COPY src/rmf/rmf_ros2/rmf_websocket src/rmf/rmf_ros2/rmf_websocket
@@ -57,15 +57,16 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
 # ==============================================================================
 FROM builder-base AS builder
 
-# 자주 수정되는 패키지만 복사 — 캐시 무효화 범위 최소화
+# 자주 수정되는 패키지 + 의존 패키지 복사 — 캐시 무효화 범위 최소화
 COPY src/rmf/rmf_ros2/rmf_fleet_adapter src/rmf/rmf_ros2/rmf_fleet_adapter
 COPY src/rmf/rmf_ros2/rmf_fleet_adapter_python src/rmf/rmf_ros2/rmf_fleet_adapter_python
+COPY src/rmf/rmf_ros2/rmf_reservation_node src/rmf/rmf_ros2/rmf_reservation_node
 
 ARG ROS_DISTRO=jazzy
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
     && . install/setup.sh \
     && colcon build \
-        --packages-select rmf_fleet_adapter rmf_fleet_adapter_python \
+        --packages-select rmf_fleet_adapter rmf_fleet_adapter_python rmf_reservation_node \
         --cmake-args -DCMAKE_BUILD_TYPE=Release \
         --event-handlers console_direct+
 
