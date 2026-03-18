@@ -134,6 +134,52 @@ if (const auto nav = context->nav_params())
 
 ---
 
+## 패치 3: ReservationNodeNegotiator "Already have a goal" skip 제거
+
+**목적**: 로봇이 충전기(is_parking_spot: true)로 이동할 때 reservation 시스템에 claim이
+되지 않는 문제를 수정한다. 기존에는 목적지가 이미 reserved location과 같으면 reservation
+프로토콜을 전체 skip했기 때문에, reservation node가 해당 spot의 점유를 모르고
+`free_parking_spot`에 계속 포함시키는 문제가 있었다.
+
+**배경**: Battery Management 시스템에서 충전기 점유 상태를 `/rmf/reservations/free_parking_spot`
+토픽으로 판별하는데, idle 충전(`finishing_request: "charge"`)으로 충전기에 간 로봇의 점유가
+reservation에 반영되지 않아 빈 충전기로 잘못 판단하는 문제 발생.
+
+**변경 내용**: "Already have a goal" 조건에서 `return`(skip) 대신 `break`하여
+아래 `make_request()`로 진행, reservation node에 정상적으로 claim이 수행되도록 함.
+
+### 수정 파일
+
+#### 3-1. `rmf_fleet_adapter/src/rmf_fleet_adapter/events/internal_ReservationNodeNegotiator.hpp`
+
+| 위치 | 패치 설명 |
+|------|----------|
+| 187-210 | `[PATCH]` "Already have a goal" skip 시에도 reservation request를 보내도록 변경 |
+
+```cpp
+// ==================================================================
+// [PATCH] "Already have a goal" skip 시에도 reservation claim 수행
+// 기존: reserved location과 goal이 같으면 reservation protocol 전체 skip
+// → 충전기(is_parking_spot:true)가 free_parking_spot에서 점유로 안 잡히는 문제
+// 변경: skip하지 않고 항상 reservation request를 보내도록 함
+// ==================================================================
+if (!always_recalculate_nearest_goal)
+{
+  for (std::size_t i = 0; i < negotiator->_goals.size(); ++i)
+  {
+    if (wp_name == context->_get_reserved_location())
+    {
+      // 기존: 바로 cb 호출하고 return → reservation node에 claim 안 됨
+      // 변경: break하여 아래 make_request()로 진행
+      break;
+    }
+  }
+}
+// ==================================================================
+```
+
+---
+
 ## 패치 검색 방법
 
 모든 패치는 아래 명령으로 찾을 수 있다:
@@ -148,7 +194,7 @@ grep -rn "\[PATCH\]" src/rmf/
 
 | 패키지 | 패치 | 빌드 명령 |
 |--------|------|----------|
-| `rmf_fleet_adapter` | 패치 1, 2 | `colcon build --packages-select rmf_fleet_adapter` |
+| `rmf_fleet_adapter` | 패치 1, 2, 3 | `colcon build --packages-select rmf_fleet_adapter` |
 | `rmf_fleet_adapter_python` | 패치 1 | `colcon build --packages-select rmf_fleet_adapter_python` |
 
 `CMakeLists.txt`는 `GLOB_RECURSE`를 사용하므로 신규 `.cpp` 파일 추가 시 별도 수정 불필요.

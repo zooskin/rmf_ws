@@ -64,11 +64,35 @@ services:
         source install/setup.bash &&
         ros2 run vda5050_fleet_adapter fleet_adapter \
           -c /vda5050_ws/src/vda5050_fleet_adapter/vda5050_fleet_adapter/config/config.yaml \
-          -n /vda5050_ws/src/vda5050_fleet_adapter/0.yaml
+          -n /vda5050_ws/src/vda5050_fleet_adapter/map/0.yaml
     depends_on:
       - rmf_traffic_schedule
       - rmf_traffic_blockade
       - rmf_task_dispatcher
+
+  # ==========================================================================
+  # Battery Management — 충전기 풀 스케줄링 (소스 마운트)
+  # ==========================================================================
+
+  battery_management:
+    <<: *rmf-common
+    container_name: battery_management
+    volumes:
+      - ./src/battery_management:/bm_ws/src/battery_management:ro
+      - ./src/vda5050_fleet_adapter/map/0.yaml:/bm_ws/nav_graph.yaml:ro
+    command:
+      - bash
+      - -c
+      - |
+        cd /bm_ws &&
+        colcon build --packages-select battery_management --symlink-install &&
+        source install/setup.bash &&
+        ros2 run battery_management battery_manager \
+          --ros-args -p config_file:=/bm_ws/src/battery_management/config/battery_management.yaml
+    depends_on:
+      - rmf_traffic_schedule
+      - rmf_task_dispatcher
+      - vda5050_fleet_adapter
 
   # ==========================================================================
   # Optional — 필요 시 주석 해제
